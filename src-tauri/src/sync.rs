@@ -39,7 +39,6 @@ pub fn start_scheduler(
     tauri::async_runtime::spawn(async move {
         let mut rx = interval_rx;
         let mut interval = tokio::time::interval(Duration::from_secs(*rx.borrow() * 60));
-        interval.tick().await; // first tick fires immediately — skip it
 
         loop {
             tokio::select! {
