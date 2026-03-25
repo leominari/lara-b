@@ -1,4 +1,4 @@
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
 use super::TokenStream;
