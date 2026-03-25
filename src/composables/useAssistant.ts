@@ -61,33 +61,13 @@ export function useAssistant() {
     }
   }
 
-  // QR polling lives inside the composable to avoid mutating qrData from outside
-  let qrPollInterval: ReturnType<typeof setInterval> | null = null
-  let qrPollTimeout: ReturnType<typeof setTimeout> | null = null
-
-  function startQrPolling() {
-    qrPollInterval = setInterval(async () => {
-      const ok = await invoke<boolean>('check_qr_status')
-      if (ok) {
-        qrData.value = null
-        clearInterval(qrPollInterval!)
-        clearTimeout(qrPollTimeout!)
-      }
-    }, 3000)
-    qrPollTimeout = setTimeout(() => {
-      clearInterval(qrPollInterval!)
-      qrData.value = null
-      messages.value.push({ role: 'assistant', content: 'Scan cancelado. Tente novamente.' })
-    }, 5 * 60 * 1000)
-  }
-
-  // Watch qrData internally — start polling when QR appears
-  watch(qrData, (val) => { if (val) startQrPolling() })
+  // QR is cleared when sync_start fires (Baileys connected)
 
   onMounted(async () => {
     unlisteners.push(await listen('sync_start', () => {
       catState.value = 'syncing'
       syncStatus.value = 'Sincronizando...'
+      qrData.value = null  // Baileys connected — clear QR overlay
     }))
     unlisteners.push(await listen<number>('sync_complete', (e) => {
       catState.value = 'idle'
@@ -139,8 +119,6 @@ export function useAssistant() {
 
   onUnmounted(() => {
     unlisteners.forEach(u => u())
-    if (qrPollInterval) clearInterval(qrPollInterval)
-    if (qrPollTimeout) clearTimeout(qrPollTimeout)
     if (errorResetTimer) clearTimeout(errorResetTimer)
     clearBubbleTimer()
   })
