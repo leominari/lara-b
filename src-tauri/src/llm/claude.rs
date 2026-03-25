@@ -6,7 +6,7 @@ use super::TokenStream;
 pub async fn stream(api_key: &str, prompt: &str) -> Result<TokenStream, String> {
     let client = Client::new();
     let body = json!({
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-6",
         "max_tokens": 1024,
         "stream": true,
         "messages": [{"role": "user", "content": prompt}]
@@ -22,11 +22,13 @@ pub async fn stream(api_key: &str, prompt: &str) -> Result<TokenStream, String> 
         .await
         .map_err(|e| e.to_string())?;
 
-    if response.status() == 401 {
-        return Err("API key inválida. Verifique nas configurações.".into());
-    }
     if !response.status().is_success() {
-        return Err(format!("Erro Claude API: {}", response.status()));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status == 401 {
+            return Err("API key inválida. Verifique nas configurações.".into());
+        }
+        return Err(format!("Erro Claude API {}: {}", status, body));
     }
 
     let stream = response.bytes_stream().flat_map(|chunk_result| {
