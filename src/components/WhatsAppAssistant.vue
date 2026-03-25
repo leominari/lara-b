@@ -134,13 +134,11 @@ async function handleClose() {
       @close="showSettings = false"
     />
 
-    <!-- Speech bubble -->
-    <div v-if="bubbleText" class="speech-bubble">
-      {{ bubbleText }}
+    <!-- Cat mascot + bubble anchored above it -->
+    <div class="cat-zone">
+      <div v-if="bubbleText" class="speech-bubble">{{ bubbleText }}</div>
+      <CatMascot :state="catState" @click="handleCatClick" />
     </div>
-
-    <!-- Cat mascot -->
-    <CatMascot :state="catState" @click="handleCatClick" />
 
     <!-- Input bar -->
     <div class="input-bar" :class="{ open: inputOpen }">
@@ -167,9 +165,18 @@ async function handleClose() {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
   width: 100%;
   height: 100%;
-  padding-top: 28px; /* space for hover controls */
+  padding: 28px 0 8px;
+}
+
+/* Wrapper que mantém o gato fixo e ancora o balão acima dele */
+.cat-zone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 /* Hover controls */
@@ -213,20 +220,24 @@ async function handleClose() {
 .close-btn:hover { background: rgba(200, 40, 40, 0.8); }
 .settings-btn:hover { background: rgba(37, 211, 102, 0.5); }
 
-/* Speech bubble */
+/* Speech bubble — posicionado absolutamente acima do gato, cresce para cima */
 .speech-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
   background: white;
   color: #222;
   border-radius: 12px;
   padding: 8px 12px;
   font-size: 0.75rem;
-  max-width: 280px;
+  width: 280px;
   line-height: 1.4;
   text-align: center;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
-  margin-bottom: 6px;
-  position: relative;
   font-family: Inter, sans-serif;
+  word-break: break-word;
 }
 .speech-bubble::after {
   content: '';
