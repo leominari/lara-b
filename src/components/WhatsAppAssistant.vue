@@ -4,7 +4,6 @@ import CatMascot from './CatMascot.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SetupWizard from './SetupWizard.vue'
 import { useAssistant } from '../composables/useAssistant'
-import QrcodeVue from 'qrcode-vue3'
 
 const {
   catState, messages, currentResponse, syncStatus, qrData, isStreaming,
@@ -44,7 +43,7 @@ async function submit() {
       <!-- QR code overlay -->
       <div v-if="qrData" class="qr-overlay">
         <p>Escaneie o QR code no WhatsApp</p>
-        <QrcodeVue :value="qrData" :size="200" level="H" />
+        <img :src="qrData" width="200" height="200" alt="WhatsApp QR Code" />
         <p class="qr-hint">Aguardando scan... (timeout: 5 min)</p>
       </div>
 
