@@ -1,8 +1,10 @@
 {
   "name": "whatsapp-sync",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "commonjs",
   "dependencies": {
-    "playwright": "^1.40.0"
+    "@whiskeysockets/baileys": "^6.7.0",
+    "qrcode": "^1.5.3",
+    "pino": "^8.0.0"
   }
 }
