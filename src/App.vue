@@ -27,10 +27,10 @@ async function closeWidget() {
 
       <!-- Content -->
       <div class="content">
-        <div v-if="activeTab === 'tasks'" class="tab-content">
+        <div v-show="activeTab === 'tasks'" class="tab-content tasks-tab">
           <h1>Widget Ativo - Tarefas</h1>
         </div>
-        <WhatsAppAssistant v-if="activeTab === 'whatsapp'" class="tab-content" />
+        <WhatsAppAssistant v-show="activeTab === 'whatsapp'" class="tab-content" />
       </div>
     </div>
   </main>
@@ -140,6 +140,9 @@ body, html, #app {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.tasks-tab {
   justify-content: center;
   align-items: center;
 }

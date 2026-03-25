@@ -24,7 +24,7 @@ watch([messages, currentResponse], async () => {
 
 async function submit() {
   const q = input.value.trim()
-  if (!q) return
+  if (!q || isStreaming.value) return
   input.value = ''
   await sendQuestion(q)
 }
