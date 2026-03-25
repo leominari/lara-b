@@ -19,9 +19,17 @@ pub fn run() {
             let app_data = app.path().app_data_dir().expect("no app data dir");
             std::fs::create_dir_all(&app_data).expect("failed to create app data dir");
             let db_path = app_data.join("messages.db");
-            let script_path = app.path().resource_dir()
-                .expect("no resource dir")
-                .join("scripts/sync.js");
+            // In dev mode resource_dir points to target/debug/ where scripts aren't copied.
+            // Use the project root (known at compile time) in debug builds.
+            let script_path = if cfg!(debug_assertions) {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent().expect("no parent of CARGO_MANIFEST_DIR")
+                    .join("scripts/sync.js")
+            } else {
+                app.path().resource_dir()
+                    .expect("no resource dir")
+                    .join("scripts/sync.js")
+            };
 
             // Init DB
             let conn = rusqlite::Connection::open(&db_path).expect("failed to open DB");
