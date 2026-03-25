@@ -1,4 +1,5 @@
 pub mod db;
+pub mod llm;
 pub mod query;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
