@@ -38,6 +38,8 @@ pub fn start_scheduler(
 ) {
     tauri::async_runtime::spawn(async move {
         let mut rx = interval_rx;
+        // Wait for frontend to mount and register event listeners before first sync
+        tokio::time::sleep(Duration::from_secs(3)).await;
         let mut interval = tokio::time::interval(Duration::from_secs(*rx.borrow() * 60));
 
         loop {
@@ -77,12 +79,16 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std:
     let now = chrono::Utc::now().timestamp();
     let since = compute_since(last_synced, lookback, now);
 
-    let output = tokio::process::Command::new("node")
+    let child = tokio::process::Command::new("node")
         .arg(script_path)
         .arg("--since")
         .arg(since.to_string())
-        .output()
-        .await;
+        .output();
+
+    let output = match tokio::time::timeout(Duration::from_secs(90), child).await {
+        Ok(result) => result,
+        Err(_) => { let _ = app.emit("sync_error", "Sync timeout (90s)"); return; }
+    };
 
     let (stdout, stderr) = match output {
         Ok(o) => (
