@@ -124,11 +124,17 @@ pub fn save_settings(
 }
 
 #[tauri::command]
-pub fn check_prerequisites() -> serde_json::Value {
-    let node_ok = std::process::Command::new("node").arg("--version").output().is_ok();
-    let playwright_ok = std::process::Command::new("npx")
+pub async fn check_prerequisites() -> serde_json::Value {
+    let node_ok = tokio::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let playwright_ok = tokio::process::Command::new("npx")
         .args(["playwright", "--version"])
         .output()
+        .await
         .map(|o| o.status.success())
         .unwrap_or(false);
     serde_json::json!({ "node": node_ok, "playwright": playwright_ok })
