@@ -98,27 +98,42 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std:
         Err(e) => { let _ = app.emit("sync_error", e.to_string()); return; }
     };
 
-    match parse_sync_output(&stdout) {
-        Ok(messages) => {
-            for msg in &messages {
-                db::upsert_message(&conn, msg).ok();
+    // Script may output multiple JSON lines (e.g. qr_required then ok)
+    let mut had_final = false;
+    for raw_line in stdout.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() { continue; }
+        match parse_sync_output(line) {
+            Ok(messages) => {
+                for msg in &messages {
+                    db::upsert_message(&conn, msg).ok();
+                }
+                db::set_setting(&conn, "last_synced_at", &now.to_string()).ok();
+                let _ = app.emit("sync_complete", messages.len());
+                had_final = true;
             }
-            db::set_setting(&conn, "last_synced_at", &now.to_string()).ok();
-            let _ = app.emit("sync_complete", messages.len());
+            Err(e) if e == "qr_required" => {
+                let v: Value = serde_json::from_str(line).unwrap_or_default();
+                let qr_data = v["qr_data"].as_str().unwrap_or("").to_string();
+                let _ = app.emit("qr_required", qr_data);
+            }
+            Err(e) => {
+                let msg = if !stderr.is_empty() {
+                    format!("{}: {}", e, stderr.trim())
+                } else {
+                    e
+                };
+                let _ = app.emit("sync_error", msg);
+                had_final = true;
+            }
         }
-        Err(e) if e == "qr_required" => {
-            let v: Value = serde_json::from_str(&stdout).unwrap_or_default();
-            let qr_data = v["qr_data"].as_str().unwrap_or("").to_string();
-            let _ = app.emit("qr_required", qr_data);
-        }
-        Err(e) => {
-            let msg = if !stderr.is_empty() {
-                format!("{}: {}", e, stderr.trim())
-            } else {
-                e
-            };
-            let _ = app.emit("sync_error", msg);
-        }
+    }
+    if !had_final {
+        let _ = app.emit("sync_error", if !stderr.is_empty() {
+            format!("Sem resposta do script: {}", stderr.trim())
+        } else {
+            "Sem resposta do script de sync".to_string()
+        });
     }
 }
 
