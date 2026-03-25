@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import lottie, { AnimationItem } from 'lottie-web'
-
-type CatState = 'idle' | 'syncing' | 'thinking' | 'responding' | 'error'
+import type { CatState } from '../composables/useAssistant'
 
 const props = defineProps<{ state: CatState }>()
 
@@ -51,6 +50,7 @@ watch(() => props.state, (state) => {
 .cat-container {
   width: 140px;
   height: 100px;
+  position: relative;
 }
 .cat-error .cat-container {
   filter: hue-rotate(300deg) saturate(2);

@@ -18,16 +18,30 @@ const form = ref<Settings>({
   ollama_model: 'llama3',
 })
 const saved = ref(false)
+const loadError = ref(false)
+const saveError = ref(false)
 
-onMounted(async () => { form.value = await props.loadSettings() })
+onMounted(async () => {
+  try {
+    form.value = await props.loadSettings()
+  } catch {
+    loadError.value = true
+  }
+})
 
 const showApiKey = computed(() => ['claude', 'openai'].includes(form.value.llm_provider))
 const showOllama = computed(() => form.value.llm_provider === 'ollama')
 
 async function save() {
-  await props.saveSettings(form.value)
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2000)
+  saveError.value = false
+  try {
+    await props.saveSettings(form.value)
+    saved.value = true
+    setTimeout(() => { saved.value = false }, 2000)
+  } catch {
+    saveError.value = true
+    setTimeout(() => { saveError.value = false }, 3000)
+  }
 }
 </script>
 
@@ -82,7 +96,9 @@ async function save() {
       </div>
     </template>
 
+    <p v-if="loadError" class="error-msg">Erro ao carregar configurações.</p>
     <button class="save-btn" @click="save">{{ saved ? '✓ Salvo!' : 'Salvar' }}</button>
+    <p v-if="saveError" class="error-msg">Erro ao salvar. Tente novamente.</p>
   </div>
 </template>
 
@@ -95,4 +111,5 @@ select, input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,25
 .save-btn { background: rgba(37,211,102,0.3); border: 1px solid rgba(37,211,102,0.5); color: white; border-radius: 6px; padding: 8px; cursor: pointer; margin-top: 4px; }
 .save-btn:hover { background: rgba(37,211,102,0.5); }
 .close-btn { background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 1rem; }
+.error-msg { font-size: 0.75rem; color: #ff5050; margin: 0; }
 </style>

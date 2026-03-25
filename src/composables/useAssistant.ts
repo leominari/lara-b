@@ -97,6 +97,7 @@ export function useAssistant() {
     unlisteners.forEach(u => u())
     if (qrPollInterval) clearInterval(qrPollInterval)
     if (qrPollTimeout) clearTimeout(qrPollTimeout)
+    if (errorResetTimer) clearTimeout(errorResetTimer)
   })
 
   async function sendQuestion(question: string) {
@@ -105,7 +106,11 @@ export function useAssistant() {
     currentResponse.value = ''
     isStreaming.value = true
     catState.value = 'thinking'
-    await invoke('ask_question', { question })
+    invoke('ask_question', { question }).catch((e) => {
+      isStreaming.value = false
+      setError()
+      messages.value.push({ role: 'assistant', content: `Erro: ${String(e)}` })
+    })
   }
 
   async function loadSettings(): Promise<Settings> {
