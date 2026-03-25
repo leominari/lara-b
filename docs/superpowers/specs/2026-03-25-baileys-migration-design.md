@@ -1,7 +1,7 @@
 # Baileys Migration Design Spec
 
 **Date:** 2026-03-25
-**Status:** Approved
+**Status:** Approved (v2 — post spec-review)
 
 ## Overview
 
@@ -13,84 +13,192 @@ Replace the Playwright-based `sync.js` (spawn-per-run, DOM scraping) with a pers
 
 ```
 App launch
-  → Rust spawns baileys.js (persistent, stdout piped)
+  → Rust spawns baileys.js (persistent, stdout + stderr piped)
   → Rust reads stdout line by line (BufReader loop)
-  → On QR line   → emit "qr_required" to frontend
-  → On messages  → upsert to SQLite, emit "sync_complete"
-  → On crash     → Rust restarts the process after 5s delay
+  → On QR line      → emit "qr_required" to frontend
+  → On ready line   → emit "sync_start" to frontend
+  → On messages     → upsert to SQLite, emit "sync_complete"
+  → On error line   → emit "sync_error"
+  → On process exit → wait 5s, restart (unless loggedOut/badSession)
 ```
 
 ---
 
 ## Script: `scripts/baileys.js`
 
-**Behavior:**
-- Loads Baileys auth state from `~/.whatsapp-assistant/baileys-auth/`
-- On first run (no auth): emits QR as base64 PNG data URL, waits for scan
-- On connected: listens to `messages.upsert` event
-- Filters `upsert.type === 'notify'` (new messages only, not history load)
-- Outputs JSON lines to stdout:
+### Stdout protocol — JSON lines
 
 ```json
 {"type":"qr","qr_data":"data:image/png;base64,..."}
-{"type":"messages","messages":[...]}
 {"type":"ready"}
+{"type":"messages","messages":[...]}
 {"type":"error","message":"..."}
+{"type":"logout"}
 ```
 
-**Message shape** (identical to current SQLite schema):
-```json
-{
-  "id": "<sha256(contact|timestamp|body)>",
-  "contact": "João Silva",
-  "chat": "João Silva",
-  "body": "Oi, tudo bem?",
-  "timestamp": 1711234567,
-  "is_mine": false
+### QR generation
+
+Baileys emits QR as a **string** (raw QR text) via `connection.update`:
+
+```js
+sock.ev.on('connection.update', ({ qr }) => {
+  if (qr) {
+    qrcode.toDataURL(qr, (err, url) => {
+      if (!err) output({ type: 'qr', qr_data: url })
+    })
+  }
+})
+```
+
+Use the `qrcode` npm package. `qr` is a string — do NOT treat it as a Buffer.
+
+### DisconnectReason handling
+
+```js
+const { DisconnectReason } = require('@whiskeysockets/baileys')
+
+// In connection.update handler:
+if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+  output({ type: 'logout' })
+  process.exit(0)           // Rust will NOT restart on clean exit 0
 }
+if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.badSession) {
+  // Delete corrupted auth and exit — Rust restarts, fresh QR will appear
+  fs.rmSync(AUTH_DIR, { recursive: true, force: true })
+  output({ type: 'error', message: 'bad_session' })
+  process.exit(1)
+}
+// All other reasons (restartRequired, connectionClosed, timedOut, etc.)
+// → reconnect internally by calling connectToWhatsApp() again
 ```
 
-**Auth persistence:** Baileys saves multi-file auth to `~/.whatsapp-assistant/baileys-auth/`. No browser profile needed. Session survives restarts.
+Rust distinguishes clean exit (code 0 = logged out, no restart) vs crash (code ≠ 0 = restart after 5s).
 
-**QR flow:** Baileys emits QR as a Buffer via `connection.update`. Convert to base64 PNG using the `qrcode` npm package and emit `{"type":"qr","qr_data":"data:image/png;base64,..."}`.
+### Message shape
 
-**Reconnection:** Baileys handles reconnection internally via `DisconnectReason`. Script exits only on `loggedOut` — Rust restarts it otherwise.
+Baileys `messages.upsert` provides `msg.key.id` (globally unique per message) — use it directly as the message ID instead of computing a SHA-256 hash.
+
+For display name:
+- Direct chats: `msg.pushName` (sender's push name) or JID local part
+- Group chats: `msg.key.participant` → strip `@s.whatsapp.net` suffix for display
+
+```js
+sock.ev.on('messages.upsert', ({ messages, type }) => {
+  if (type !== 'notify') return  // skip history loads
+  const formatted = messages
+    .filter(msg => !msg.key.fromMe && msg.message)
+    .map(msg => {
+      const isGroup = msg.key.remoteJid.endsWith('@g.us')
+      const senderJid = isGroup ? msg.key.participant : msg.key.remoteJid
+      const contact = msg.pushName || senderJid.split('@')[0]
+      const chat = isGroup
+        ? (groupMetadataCache[msg.key.remoteJid] || msg.key.remoteJid.split('@')[0])
+        : contact
+      const body = msg.message.conversation
+        || msg.message.extendedTextMessage?.text
+        || ''
+      if (!body) return null
+      return {
+        id: msg.key.id,
+        contact,
+        chat,
+        body,
+        timestamp: msg.messageTimestamp,
+        is_mine: false,
+      }
+    })
+    .filter(Boolean)
+  if (formatted.length > 0) {
+    output({ type: 'messages', messages: formatted })
+  }
+})
+```
+
+For group chat names: maintain a simple in-memory cache `groupMetadataCache`. On first message from a group JID, call `sock.groupMetadata(jid)` to get the subject (group name).
+
+### Auth persistence
+
+Auth stored in `~/.whatsapp-assistant/baileys-auth/` via Baileys `useMultiFileAuthState`.
+
+If the auth directory is missing or empty (fresh install or after `badSession` deletion), `useMultiFileAuthState` creates it and returns empty credentials — Baileys will then emit a QR event normally. No special handling needed; the QR flow is the default when credentials are absent.
+
+### `--check-login-only` flag removal
+
+`baileys.js` does **not** support `--check-login-only`. The `check_qr_status` Tauri command must be removed (see Rust section).
 
 ---
 
 ## Rust: `src-tauri/src/sync.rs`
 
-**Replace `start_scheduler` with `start_baileys`:**
+### Return type for line parsing
+
+Replace the current `parse_sync_output(stdout: &str) -> Result<Vec<Message>, String>` with:
 
 ```rust
-pub fn start_baileys(app, db_path, script_path, sync_in_progress)
+pub enum BaileysLine {
+    Messages(Vec<Message>),
+    Qr(String),      // qr_data string
+    Ready,
+    Logout,
+    Error(String),
+}
+
+pub fn parse_baileys_line(line: &str) -> Result<BaileysLine, String>
 ```
 
-- Spawns `node baileys.js` with `stdout: Stdio::piped()`
-- Reads stdout with `tokio::io::BufReader` + `lines()` in async loop
-- Parses each line with updated `parse_baileys_line(line)`
-- On process exit: waits 5s, restarts (unless app is shutting down)
-- Removes `interval_rx` / `IntervalTx` — no more polling interval
+No more string-matching `== "qr_required"`. Each variant is handled cleanly in the streaming loop.
 
-**Updated JSON parser (`parse_baileys_line`):**
+### `start_baileys` function
+
+Replaces `start_scheduler`. No `interval_rx` parameter.
+
+```rust
+pub fn start_baileys(
+    app: AppHandle,
+    db_path: std::path::PathBuf,
+    script_path: std::path::PathBuf,  // points to baileys.js
+)
 ```
-type=qr       → return Err("qr_required") with qr_data
-type=messages → return Ok(Vec<Message>)
-type=ready    → log only, no event emitted
-type=error    → return Err(message)
-```
 
-**`sync_complete` event payload:** `messages.len()` — unchanged.
+`sync_in_progress` is removed — it guarded against overlapping periodic runs, which no longer exist with a persistent process.
 
-**Removed:** `--since` argument, `last_synced_at` setting, `compute_since()`, polling interval logic.
+Internal loop:
+1. Spawn `node baileys.js` with `stdout: Stdio::piped()`, `stderr: Stdio::piped()`
+2. Spawn a separate task to forward stderr lines to `eprintln!` for diagnostics
+3. Read stdout lines via `tokio::io::BufReader::lines()`
+4. Match on `parse_baileys_line`:
+   - `Qr(data)` → `app.emit("qr_required", data)`
+   - `Ready` → `app.emit("sync_start", ())`
+   - `Messages(msgs)` → upsert each + `app.emit("sync_complete", msgs.len())`
+   - `Logout` → `app.emit("sync_error", "Sessão encerrada")`, stop (no restart)
+   - `Error(e)` → `app.emit("sync_error", e)`
+5. On process exit code 0 (Logout): do not restart
+6. On process exit code ≠ 0: wait 5s, restart
+
+---
+
+## `src-tauri/src/commands.rs`
+
+- **Remove** `check_qr_status` command entirely (QR flow now handled via persistent connection)
+- **Remove** `IntervalTx` state and `interval_tx` param from `save_settings`
+- Keep `sync_interval_minutes` DB setting (UI stays, no runtime effect for now)
 
 ---
 
 ## `src-tauri/src/lib.rs`
 
-- Replace `start_scheduler(...)` call with `start_baileys(...)`
-- Remove `IntervalTx` state and `interval_tx` from `save_settings` command (no more interval setting needed at runtime)
-- Keep `sync_interval_minutes` setting in DB for now (can be cleaned up later)
+- Replace `start_scheduler(...)` with `start_baileys(...)`
+- Remove `IntervalTx` state registration
+- Update `script_path` strings from `sync.js` → `baileys.js` in both dev and release path resolution
+- Remove `check_qr_status` from `tauri::generate_handler![...]`
+
+---
+
+## `src/components/SetupWizard.vue`
+
+- Remove the `playwright` check from `check_prerequisites`
+- `check_prerequisites` now only checks `node` — response shape: `{ node: boolean }`
+- Update UI to remove the Playwright row
 
 ---
 
@@ -98,6 +206,9 @@ type=error    → return Err(message)
 
 ```json
 {
+  "name": "whatsapp-sync",
+  "version": "2.0.0",
+  "type": "commonjs",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.0",
     "qrcode": "^1.5.3"
@@ -109,25 +220,18 @@ Remove: `playwright`, `playwright-extra`, `puppeteer-extra-plugin-stealth`
 
 ---
 
-## `src-tauri/src/commands.rs`
-
-- Remove `IntervalTx` import and `interval_tx: State<'_, IntervalTx>` from `save_settings`
-- `sync_interval_minutes` setting still saved to DB (UI field stays, future use)
-
----
-
 ## Data Flow
 
 ```
 WhatsApp servers
   → Baileys WebSocket
-  → messages.upsert event
+  → messages.upsert (type=notify)
   → baileys.js formats + writes JSON line to stdout
   → Rust BufReader reads line
-  → parse_baileys_line()
+  → parse_baileys_line() → BaileysLine::Messages(msgs)
   → upsert_message() × N
   → emit("sync_complete", count)
-  → Vue useAssistant updates bubbleText
+  → Vue: bubbleText = "N novas mensagens 📬"
 ```
 
 ---
@@ -135,6 +239,6 @@ WhatsApp servers
 ## Out of Scope
 
 - Sending messages
-- Message history backfill on reconnect (Baileys delivers only new messages on `notify`)
-- Removing `sync_interval_minutes` from settings UI (low priority)
-- Graceful shutdown signal to baileys.js process
+- Message history backfill (Baileys delivers only new messages on `notify`)
+- Removing `sync_interval_minutes` from settings UI
+- Graceful SIGTERM to baileys.js on app quit
