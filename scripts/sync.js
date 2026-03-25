@@ -126,10 +126,38 @@ async function main() {
 
   const messages = [];
   try {
-    // Chat list — try both old and new selectors
-    const chatItems = await page.$$('[data-testid="cell-frame-container"], [aria-label] [role="listitem"]');
+    // Scroll chat list to load more items (WhatsApp uses virtual list)
+    const chatPanel = await page.$('#pane-side, #side');
+    if (chatPanel) {
+      for (let i = 0; i < 5; i++) {
+        await chatPanel.evaluate(el => el.scrollBy(0, 600));
+        await page.waitForTimeout(300);
+      }
+      await chatPanel.evaluate(el => el.scrollTo(0, 0));
+      await page.waitForTimeout(300);
+    }
 
-    for (const chatItem of chatItems.slice(0, 20)) {
+    const chatItems = await page.$$('[data-testid="cell-frame-container"], [role="listitem"]');
+
+    // Separate unread chats from the rest — unread badge shows a number in the row
+    const unreadItems = [];
+    const otherItems = [];
+    for (const item of chatItems) {
+      const hasUnread = await item.evaluate(el => {
+        const spans = [...el.querySelectorAll('span')];
+        return spans.some(s => {
+          const t = s.textContent.trim();
+          return /^\d{1,3}$/.test(t) || t === '99+';
+        });
+      }).catch(() => false);
+      if (hasUnread) unreadItems.push(item);
+      else otherItems.push(item);
+    }
+
+    // Process unread first, then recent — up to 40 total
+    const toProcess = [...unreadItems, ...otherItems].slice(0, 40);
+
+    for (const chatItem of toProcess) {
       try {
         await chatItem.click();
         await page.waitForTimeout(600);
