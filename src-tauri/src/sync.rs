@@ -61,7 +61,7 @@ pub fn start_scheduler(
     });
 }
 
-async fn run_sync(app: &AppHandle, db_path: &std::path::PathBuf, script_path: &std::path::PathBuf) {
+async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std::path::Path) {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => { let _ = app.emit("sync_error", e.to_string()); return; }
@@ -85,8 +85,11 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::PathBuf, script_path: &s
         .output()
         .await;
 
-    let stdout = match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+    let (stdout, stderr) = match output {
+        Ok(o) => (
+            String::from_utf8_lossy(&o.stdout).to_string(),
+            String::from_utf8_lossy(&o.stderr).to_string(),
+        ),
         Err(e) => { let _ = app.emit("sync_error", e.to_string()); return; }
     };
 
@@ -104,7 +107,12 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::PathBuf, script_path: &s
             let _ = app.emit("qr_required", qr_data);
         }
         Err(e) => {
-            let _ = app.emit("sync_error", e);
+            let msg = if !stderr.is_empty() {
+                format!("{}: {}", e, stderr.trim())
+            } else {
+                e
+            };
+            let _ = app.emit("sync_error", msg);
         }
     }
 }
