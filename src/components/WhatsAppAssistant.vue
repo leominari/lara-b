@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { marked } from 'marked'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import CatMascot from './CatMascot.vue'
 import SettingsPanel from './SettingsPanel.vue'
+import FavoritesPanel from './FavoritesPanel.vue'
 import SetupWizard from './SetupWizard.vue'
 import { useAssistant } from '../composables/useAssistant'
 
@@ -17,10 +19,15 @@ const {
   loadSettings,
   saveSettings,
   checkPrerequisites,
+  getContacts,
+  getFavorites,
+  addFavorite,
+  removeFavorite,
 } = useAssistant()
 
 const setupComplete = ref(false)
 const showSettings = ref(false)
+const showFavorites = ref(false)
 const isHovered = ref(false)
 const inputText = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
@@ -40,6 +47,7 @@ onMounted(async () => {
     if (!focused) {
       inputOpen.value = false
       showSettings.value = false
+      showFavorites.value = false
     }
   })
 })
@@ -66,6 +74,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     inputOpen.value = false
     showSettings.value = false
+    showFavorites.value = false
   }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
@@ -83,6 +92,69 @@ async function handleClose() {
   const win = getCurrentWindow()
   await win.close()
 }
+
+// ── Bubble pagination ──────────────────────────────────────────────────────
+const CHARS_PER_PAGE = 120
+
+// Split a long block into pages by grouping sentences; fall back to words only
+// when a single sentence exceeds the limit.
+function splitIntoPages(text: string): string[] {
+  // 1. Paragraph breaks → hard page boundaries
+  const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(Boolean)
+  if (!paragraphs.length) return [text]
+
+  const pages: string[] = []
+
+  for (const para of paragraphs) {
+    if (para.length <= CHARS_PER_PAGE) {
+      pages.push(para)
+      continue
+    }
+
+    // 2. Split paragraph into sentences (keeps trailing punctuation/space)
+    const raw = para.match(/[^.!?\n]+[.!?\n]*\s*/g) ?? [para]
+
+    let page = ''
+    for (const sentence of raw) {
+      const candidate = page ? page + sentence : sentence
+      if (candidate.length > CHARS_PER_PAGE && page) {
+        pages.push(page.trim())
+        page = sentence
+      } else {
+        page = candidate
+      }
+    }
+    if (page.trim()) pages.push(page.trim())
+  }
+
+  return pages.length ? pages : [text]
+}
+
+const bubblePageIndex = ref(0)
+
+const bubblePages = computed(() =>
+  bubbleText.value ? splitIntoPages(bubbleText.value) : []
+)
+
+const currentBubblePage = computed(() =>
+  bubblePages.value[bubblePageIndex.value] ?? ''
+)
+
+const currentBubbleHtml = computed(() =>
+  marked.parse(currentBubblePage.value) as string
+)
+
+const hasNextPage = computed(() =>
+  bubblePageIndex.value < bubblePages.value.length - 1
+)
+
+const hasPrevPage = computed(() => bubblePageIndex.value > 0)
+
+// During streaming: show last page (latest tokens). When done: reset to first.
+watch(bubbleText, () => { bubblePageIndex.value = 0 })
+watch(isStreaming, (streaming) => {
+  if (streaming) bubblePageIndex.value = bubblePages.value.length - 1
+})
 </script>
 
 <template>
@@ -107,25 +179,6 @@ async function handleClose() {
     @mouseleave="isHovered = false"
     @keydown="handleKeydown"
   >
-    <!-- Hover controls -->
-    <div class="hover-controls" :class="{ visible: isHovered }">
-      <div
-        class="ctrl-btn move-btn"
-        title="Mover"
-        @mousedown="handleMoveMousedown"
-      >⠿</div>
-      <div
-        class="ctrl-btn settings-btn"
-        title="Configurações"
-        @click="showSettings = !showSettings"
-      >⚙</div>
-      <div
-        class="ctrl-btn close-btn"
-        title="Fechar"
-        @click="handleClose"
-      >✕</div>
-    </div>
-
     <!-- Settings panel overlay -->
     <SettingsPanel
       v-if="showSettings"
@@ -134,9 +187,35 @@ async function handleClose() {
       @close="showSettings = false"
     />
 
+    <!-- Favorites panel overlay -->
+    <FavoritesPanel
+      v-if="showFavorites"
+      :getContacts="getContacts"
+      :getFavorites="getFavorites"
+      :addFavorite="addFavorite"
+      :removeFavorite="removeFavorite"
+      @close="showFavorites = false"
+    />
+
     <!-- Cat mascot + bubble anchored above it -->
     <div class="cat-zone">
-      <div v-if="bubbleText" class="speech-bubble">{{ bubbleText }}</div>
+      <div v-if="currentBubblePage" class="speech-bubble">
+        <button class="bubble-close" @click.stop="bubbleText = ''" title="Fechar">✕</button>
+        <div class="bubble-text" v-html="currentBubbleHtml" />
+        <div v-if="(hasPrevPage || hasNextPage) && !isStreaming" class="bubble-nav">
+          <button
+            class="bubble-nav-btn"
+            :disabled="!hasPrevPage"
+            @click.stop="bubblePageIndex--"
+          >◀</button>
+          <span class="bubble-page">{{ bubblePageIndex + 1 }}/{{ bubblePages.length }}</span>
+          <button
+            class="bubble-nav-btn"
+            :disabled="!hasNextPage"
+            @click.stop="bubblePageIndex++"
+          >▶</button>
+        </div>
+      </div>
       <CatMascot :state="catState" @click="handleCatClick" />
     </div>
 
@@ -155,6 +234,30 @@ async function handleClose() {
         :disabled="isStreaming || !inputText.trim()"
         @click="handleSubmit"
       >→</button>
+    </div>
+
+    <!-- Controls -->
+    <div class="hover-controls" :class="{ visible: isHovered }">
+      <div
+        class="ctrl-btn move-btn"
+        title="Mover"
+        @mousedown="handleMoveMousedown"
+      >⠿</div>
+      <div
+        class="ctrl-btn favorites-btn"
+        title="Favoritos"
+        @click="showFavorites = !showFavorites; showSettings = false"
+      >★</div>
+      <div
+        class="ctrl-btn settings-btn"
+        title="Configurações"
+        @click="showSettings = !showSettings; showFavorites = false"
+      >⚙</div>
+      <div
+        class="ctrl-btn close-btn"
+        title="Fechar"
+        @click="handleClose"
+      >✕</div>
     </div>
   </div>
 </template>
@@ -181,16 +284,12 @@ async function handleClose() {
 
 /* Hover controls */
 .hover-controls {
-  position: absolute;
-  top: 4px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   gap: 8px;
+  margin-top: 6px;
   opacity: 0;
   transition: opacity 200ms ease-out;
   pointer-events: none;
-  z-index: 10;
 }
 .hover-controls.visible {
   opacity: 1;
@@ -219,6 +318,7 @@ async function handleClose() {
 .move-btn:active { cursor: grabbing; }
 .close-btn:hover { background: rgba(200, 40, 40, 0.8); }
 .settings-btn:hover { background: rgba(37, 211, 102, 0.5); }
+.favorites-btn:hover { background: rgba(245, 197, 24, 0.4); }
 
 /* Speech bubble — posicionado absolutamente acima do gato, cresce para cima */
 .speech-bubble {
@@ -238,6 +338,81 @@ async function handleClose() {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
   font-family: Inter, sans-serif;
   word-break: break-word;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.bubble-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  width: 100%;
+  text-align: left;
+}
+
+.bubble-text :deep(p) { margin: 0; }
+.bubble-text :deep(strong) { font-weight: 600; }
+.bubble-text :deep(em) { font-style: italic; }
+.bubble-text :deep(code) {
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-family: monospace;
+  font-size: 0.7rem;
+}
+.bubble-text :deep(ul), .bubble-text :deep(ol) {
+  padding-left: 14px;
+  margin: 0;
+}
+.bubble-text :deep(li) { margin: 0; }
+
+.bubble-close {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 0.65rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+.bubble-close:hover { color: #555; }
+
+.bubble-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bubble-nav-btn {
+  background: rgba(0, 0, 0, 0.08);
+  border: none;
+  border-radius: 8px;
+  padding: 2px 7px;
+  font-size: 0.65rem;
+  color: #555;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.bubble-nav-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.18);
+}
+.bubble-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.bubble-page {
+  font-size: 0.65rem;
+  color: #888;
+  min-width: 28px;
+  text-align: center;
 }
 .speech-bubble::after {
   content: '';

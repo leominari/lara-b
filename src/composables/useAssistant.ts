@@ -150,6 +150,51 @@ export function useAssistant() {
     return await invoke<{ node: boolean; playwright: boolean }>('check_prerequisites')
   }
 
+  // ── Favorites ────────────────────────────────────────────────────────────
+  const favoriteDebounces = new Map<string, ReturnType<typeof setTimeout>>()
+
+  async function getContacts(): Promise<string[]> {
+    return invoke<string[]>('get_contacts')
+  }
+
+  async function getFavorites(): Promise<string[]> {
+    return invoke<string[]>('list_favorites')
+  }
+
+  async function addFavorite(contact: string) {
+    await invoke('add_favorite', { contact })
+  }
+
+  async function removeFavorite(contact: string) {
+    await invoke('remove_favorite', { contact })
+  }
+
+  onMounted(async () => {
+    unlisteners.push(await listen<string[]>('favorite_activity', (e) => {
+      for (const contact of e.payload) {
+        const existing = favoriteDebounces.get(contact)
+        if (existing) clearTimeout(existing)
+        const timer = setTimeout(() => {
+          favoriteDebounces.delete(contact)
+          currentResponse.value = ''
+          isStreaming.value = true
+          catState.value = 'thinking'
+          invoke('summarize_contact', { contact }).catch((err) => {
+            isStreaming.value = false
+            setError()
+            messages.value.push({ role: 'assistant', content: `Erro: ${String(err)}` })
+          })
+        }, 2 * 60 * 1000)
+        favoriteDebounces.set(contact, timer)
+      }
+    }))
+  })
+
+  onUnmounted(() => {
+    for (const timer of favoriteDebounces.values()) clearTimeout(timer)
+    favoriteDebounces.clear()
+  })
+
   return {
     catState,
     messages,
@@ -164,5 +209,9 @@ export function useAssistant() {
     loadSettings,
     saveSettings,
     checkPrerequisites,
+    getContacts,
+    getFavorites,
+    addFavorite,
+    removeFavorite,
   }
 }

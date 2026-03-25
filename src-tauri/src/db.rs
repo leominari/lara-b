@@ -25,7 +25,61 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS favorites (
+            contact TEXT PRIMARY KEY
+        );
     ")
+}
+
+pub fn add_favorite(conn: &Connection, contact: &str) -> Result<()> {
+    conn.execute("INSERT OR IGNORE INTO favorites (contact) VALUES (?1)", params![contact])?;
+    Ok(())
+}
+
+pub fn remove_favorite(conn: &Connection, contact: &str) -> Result<()> {
+    conn.execute("DELETE FROM favorites WHERE contact = ?1", params![contact])?;
+    Ok(())
+}
+
+pub fn get_favorites(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT contact FROM favorites ORDER BY contact")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+pub fn is_favorite(conn: &Connection, contact: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM favorites WHERE contact = ?1",
+        params![contact], |r| r.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+pub fn get_all_contacts(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT contact FROM messages WHERE is_mine = 0 ORDER BY contact"
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+pub fn get_recent_messages_from_contact(conn: &Connection, contact: &str, limit: usize) -> Result<Vec<Message>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, contact, chat, body, timestamp, is_mine
+         FROM messages WHERE contact = ?1 AND is_mine = 0
+         ORDER BY timestamp DESC LIMIT ?2"
+    )?;
+    let rows = stmt.query_map(params![contact, limit as i64], |row| {
+        Ok(Message {
+            id: row.get(0)?,
+            contact: row.get(1)?,
+            chat: row.get(2)?,
+            body: row.get(3)?,
+            timestamp: row.get(4)?,
+            is_mine: row.get::<_, i64>(5)? != 0,
+        })
+    })?;
+    rows.collect()
 }
 
 pub fn upsert_message(conn: &Connection, msg: &Message) -> Result<()> {

@@ -79,7 +79,7 @@ pub fn get_settings(db_path: State<'_, DbPath>) -> Result<SettingsPayload, Strin
     Ok(SettingsPayload {
         sync_interval_minutes: db::get_setting_or(&conn, "sync_interval_minutes", "5"),
         initial_lookback_days: db::get_setting_or(&conn, "initial_lookback_days", "7"),
-        llm_provider: db::get_setting_or(&conn, "llm_provider", "claude"),
+        llm_provider: db::get_setting_or(&conn, "llm_provider", "ollama"),
         llm_api_key: db::get_setting_or(&conn, "llm_api_key", ""),
         ollama_base_url: db::get_setting_or(&conn, "ollama_base_url", "http://localhost:11434"),
         ollama_model: db::get_setting_or(&conn, "ollama_model", "llama3"),
@@ -100,6 +100,85 @@ pub fn save_settings(
     db::set_setting(&conn, "ollama_base_url", &payload.ollama_base_url).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "ollama_model", &payload.ollama_model).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "bubble_timeout_seconds", &payload.bubble_timeout_seconds).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_contacts(db_path: State<'_, DbPath>) -> Result<Vec<String>, String> {
+    let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
+    db::get_all_contacts(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_favorites(db_path: State<'_, DbPath>) -> Result<Vec<String>, String> {
+    let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
+    db::get_favorites(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_favorite(contact: String, db_path: State<'_, DbPath>) -> Result<(), String> {
+    let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
+    db::add_favorite(&conn, &contact).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_favorite(contact: String, db_path: State<'_, DbPath>) -> Result<(), String> {
+    let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
+    db::remove_favorite(&conn, &contact).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn summarize_contact(
+    contact: String,
+    app: AppHandle,
+    db_path: State<'_, DbPath>,
+) -> Result<(), String> {
+    let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
+
+    let provider = db::get_setting_or(&conn, "llm_provider", "ollama");
+    let config = match provider.as_str() {
+        "openai" => LlmConfig::OpenAi {
+            api_key: db::get_setting_or(&conn, "llm_api_key", ""),
+        },
+        "ollama" => LlmConfig::Ollama {
+            base_url: db::get_setting_or(&conn, "ollama_base_url", "http://localhost:11434"),
+            model: db::get_setting_or(&conn, "ollama_model", "llama3"),
+        },
+        _ => LlmConfig::Claude {
+            api_key: db::get_setting_or(&conn, "llm_api_key", ""),
+        },
+    };
+
+    let api_key_empty = match &config {
+        LlmConfig::Claude { api_key } | LlmConfig::OpenAi { api_key } => api_key.is_empty(),
+        _ => false,
+    };
+    if api_key_empty {
+        let _ = app.emit("llm_error", "Configure sua API key nas configurações.");
+        return Ok(());
+    }
+
+    let messages = db::get_recent_messages_from_contact(&conn, &contact, 30)
+        .map_err(|e| e.to_string())?;
+    if messages.is_empty() {
+        return Ok(());
+    }
+
+    let prompt = crate::query::build_contact_summary_prompt(&messages, &contact);
+    drop(conn);
+
+    let mut stream = match llm::stream_completion(config, prompt).await {
+        Ok(s) => s,
+        Err(e) => { let _ = app.emit("llm_error", e); return Ok(()); }
+    };
+
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(token) => { let _ = app.emit("llm_token", token); }
+            Err(e) => { let _ = app.emit("llm_error", e); return Ok(()); }
+        }
+    }
+    let _ = app.emit("llm_done", true);
     Ok(())
 }
 

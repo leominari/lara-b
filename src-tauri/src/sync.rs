@@ -88,12 +88,25 @@ pub fn start_baileys(
                             let _ = app_inner.emit("sync_start", ());
                         }
                         Ok(BaileysLine::Messages(msgs)) => {
+                            let mut favorite_contacts: Vec<String> = Vec::new();
                             if let Ok(conn) = Connection::open(&db_path_inner) {
                                 for msg in &msgs {
                                     crate::db::upsert_message(&conn, msg).ok();
                                 }
+                                let senders: std::collections::HashSet<&str> = msgs.iter()
+                                    .filter(|m| !m.is_mine)
+                                    .map(|m| m.contact.as_str())
+                                    .collect();
+                                for sender in senders {
+                                    if crate::db::is_favorite(&conn, sender).unwrap_or(false) {
+                                        favorite_contacts.push(sender.to_string());
+                                    }
+                                }
                             }
                             let _ = app_inner.emit("sync_complete", msgs.len());
+                            if !favorite_contacts.is_empty() {
+                                let _ = app_inner.emit("favorite_activity", favorite_contacts);
+                            }
                         }
                         Ok(BaileysLine::Logout) => {
                             let _ = app_inner.emit("sync_error", "Sessão encerrada. Reinicie o app para fazer login novamente.");

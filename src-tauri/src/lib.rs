@@ -45,6 +45,11 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::check_prerequisites,
+            commands::get_contacts,
+            commands::list_favorites,
+            commands::add_favorite,
+            commands::remove_favorite,
+            commands::summarize_contact,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

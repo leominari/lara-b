@@ -26,8 +26,26 @@ pub fn build_prompt(messages: &[Message], question: &str) -> String {
     };
 
     format!(
-        "Você é um assistente pessoal. Analise as mensagens abaixo e responda à pergunta do usuário.\n\n{}\nPergunta: {}",
+        "Você é um assistente pessoal super objetivo. Analise as mensagens abaixo e responda à pergunta do usuário de forma direta e concisa.\n\nIMPORTANTE — formato de exibição: sua resposta aparece em um widget flutuante com balões de 3 linhas (~120 caracteres cada). Estruture a resposta em parágrafos curtos de no máximo 2 frases, separados por linha em branco. Cada parágrafo deve ser uma ideia completa e autossuficiente. Nunca termine um parágrafo no meio de uma frase. Pode usar markdown simples (negrito, itálico, listas curtas).\n\n{}\nPergunta: {}",
         header, question
+    )
+}
+
+pub fn build_contact_summary_prompt(messages: &[Message], contact: &str) -> String {
+    let mut ordered: Vec<&Message> = messages.iter().collect();
+    ordered.reverse();
+
+    let mut lines = String::new();
+    for msg in &ordered {
+        let dt = chrono::DateTime::from_timestamp(msg.timestamp, 0)
+            .map(|d| d.format("%H:%M").to_string())
+            .unwrap_or_else(|| msg.timestamp.to_string());
+        lines.push_str(&format!("[{}] {}\n", dt, msg.body));
+    }
+
+    format!(
+        "Você é um assistente pessoal. Resuma em 2-3 frases curtas o que {} está falando nas mensagens abaixo. Seja direto. Use parágrafos curtos separados por linha em branco. Cada parágrafo deve ter no máximo 2 frases.\n\nMensagens de {}:\n{}",
+        contact, contact, lines
     )
 }
 

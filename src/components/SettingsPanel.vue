@@ -36,9 +36,15 @@ const showOllama = computed(() => form.value.llm_provider === 'ollama')
 async function save() {
   saveError.value = false
   try {
-    await props.saveSettings(form.value)
+    await props.saveSettings({
+      ...form.value,
+      bubble_timeout_seconds: String(form.value.bubble_timeout_seconds),
+    })
     saved.value = true
-    setTimeout(() => { saved.value = false }, 2000)
+    setTimeout(() => {
+      saved.value = false
+      emit('close')
+    }, 1500)
   } catch {
     saveError.value = true
     setTimeout(() => { saveError.value = false }, 3000)
@@ -115,7 +121,20 @@ async function save() {
 </template>
 
 <style scoped>
-.settings { display: flex; flex-direction: column; gap: 10px; padding: 10px; }
+.settings {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(18, 18, 18, 0.97);
+  backdrop-filter: blur(6px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  font-family: Inter, sans-serif;
+  color: white;
+}
 .settings-header { display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 label { font-size: 0.75rem; color: #aaa; }
