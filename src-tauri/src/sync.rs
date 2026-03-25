@@ -63,9 +63,15 @@ pub fn start_scheduler(
 }
 
 async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std::path::Path) {
+    eprintln!("[sync] starting — script: {}", script_path.display());
+    eprintln!("[sync] db: {}", db_path.display());
+
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
-        Err(e) => { let _ = app.emit("sync_error", e.to_string()); return; }
+        Err(e) => {
+            eprintln!("[sync] DB open error: {}", e);
+            let _ = app.emit("sync_error", e.to_string()); return;
+        }
     };
     db::init_db(&conn).ok();
 
@@ -78,7 +84,16 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std:
         .unwrap_or(7);
     let now = chrono::Utc::now().timestamp();
     let since = compute_since(last_synced, lookback, now);
+    eprintln!("[sync] since={} last_synced={:?}", since, last_synced);
 
+    // Check if script exists
+    if !script_path.exists() {
+        eprintln!("[sync] ERROR: script not found at {}", script_path.display());
+        let _ = app.emit("sync_error", format!("sync.js não encontrado em {}", script_path.display()));
+        return;
+    }
+
+    eprintln!("[sync] spawning node...");
     let child = tokio::process::Command::new("node")
         .arg(script_path)
         .arg("--since")
@@ -87,15 +102,25 @@ async fn run_sync(app: &AppHandle, db_path: &std::path::Path, script_path: &std:
 
     let output = match tokio::time::timeout(Duration::from_secs(90), child).await {
         Ok(result) => result,
-        Err(_) => { let _ = app.emit("sync_error", "Sync timeout (90s)"); return; }
+        Err(_) => {
+            eprintln!("[sync] TIMEOUT after 90s");
+            let _ = app.emit("sync_error", "Sync timeout (90s)"); return;
+        }
     };
 
     let (stdout, stderr) = match output {
-        Ok(o) => (
-            String::from_utf8_lossy(&o.stdout).to_string(),
-            String::from_utf8_lossy(&o.stderr).to_string(),
-        ),
-        Err(e) => { let _ = app.emit("sync_error", e.to_string()); return; }
+        Ok(o) => {
+            let out = String::from_utf8_lossy(&o.stdout).to_string();
+            let err = String::from_utf8_lossy(&o.stderr).to_string();
+            eprintln!("[sync] exit_code={:?}", o.status.code());
+            eprintln!("[sync] stdout={}", out.trim());
+            if !err.is_empty() { eprintln!("[sync] stderr={}", err.trim()); }
+            (out, err)
+        }
+        Err(e) => {
+            eprintln!("[sync] spawn error: {}", e);
+            let _ = app.emit("sync_error", e.to_string()); return;
+        }
     };
 
     // Script may output multiple JSON lines (e.g. qr_required then ok)
