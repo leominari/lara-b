@@ -1,5 +1,4 @@
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use crate::db;
 use crate::query::build_prompt;
@@ -9,7 +8,6 @@ use futures_util::StreamExt;
 
 pub struct DbPath(pub std::path::PathBuf);
 pub struct ScriptPath(pub std::path::PathBuf);
-pub struct IntervalTx(pub watch::Sender<u64>);
 
 #[derive(Serialize, Deserialize)]
 pub struct SettingsPayload {
@@ -76,21 +74,6 @@ pub async fn ask_question(
 }
 
 #[tauri::command]
-pub async fn check_qr_status(
-    script_path: State<'_, ScriptPath>,
-) -> Result<bool, String> {
-    let output = tokio::process::Command::new("node")
-        .arg(&script_path.0)
-        .arg("--check-login-only")
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_default();
-    Ok(v["logged_in"].as_bool().unwrap_or(false))
-}
-
-#[tauri::command]
 pub fn get_settings(db_path: State<'_, DbPath>) -> Result<SettingsPayload, String> {
     let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
     Ok(SettingsPayload {
@@ -108,7 +91,6 @@ pub fn get_settings(db_path: State<'_, DbPath>) -> Result<SettingsPayload, Strin
 pub fn save_settings(
     payload: SettingsPayload,
     db_path: State<'_, DbPath>,
-    interval_tx: State<'_, IntervalTx>,
 ) -> Result<(), String> {
     let conn = Connection::open(&db_path.0).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "sync_interval_minutes", &payload.sync_interval_minutes).map_err(|e| e.to_string())?;
@@ -118,11 +100,6 @@ pub fn save_settings(
     db::set_setting(&conn, "ollama_base_url", &payload.ollama_base_url).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "ollama_model", &payload.ollama_model).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "bubble_timeout_seconds", &payload.bubble_timeout_seconds).map_err(|e| e.to_string())?;
-
-    // Restart scheduler if interval changed
-    if let Ok(minutes) = payload.sync_interval_minutes.parse::<u64>() {
-        let _ = interval_tx.0.send(minutes);
-    }
     Ok(())
 }
 
@@ -134,11 +111,5 @@ pub async fn check_prerequisites() -> serde_json::Value {
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
-    let playwright_ok = tokio::process::Command::new("npx")
-        .args(["playwright", "--version"])
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    serde_json::json!({ "node": node_ok, "playwright": playwright_ok })
+    serde_json::json!({ "node": node_ok })
 }

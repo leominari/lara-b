@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result, params};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
     pub id: String,
     pub contact: String,
