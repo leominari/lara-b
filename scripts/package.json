@@ -1,0 +1,8 @@
+{
+  "name": "whatsapp-sync",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
