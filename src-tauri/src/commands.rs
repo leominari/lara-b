@@ -19,6 +19,7 @@ pub struct SettingsPayload {
     pub llm_api_key: String,
     pub ollama_base_url: String,
     pub ollama_model: String,
+    pub bubble_timeout_seconds: String,
 }
 
 #[tauri::command]
@@ -99,6 +100,7 @@ pub fn get_settings(db_path: State<'_, DbPath>) -> Result<SettingsPayload, Strin
         llm_api_key: db::get_setting_or(&conn, "llm_api_key", ""),
         ollama_base_url: db::get_setting_or(&conn, "ollama_base_url", "http://localhost:11434"),
         ollama_model: db::get_setting_or(&conn, "ollama_model", "llama3"),
+        bubble_timeout_seconds: db::get_setting_or(&conn, "bubble_timeout_seconds", "10"),
     })
 }
 
@@ -115,6 +117,7 @@ pub fn save_settings(
     db::set_setting(&conn, "llm_api_key", &payload.llm_api_key).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "ollama_base_url", &payload.ollama_base_url).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "ollama_model", &payload.ollama_model).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "bubble_timeout_seconds", &payload.bubble_timeout_seconds).map_err(|e| e.to_string())?;
 
     // Restart scheduler if interval changed
     if let Ok(minutes) = payload.sync_interval_minutes.parse::<u64>() {

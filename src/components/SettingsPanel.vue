@@ -16,6 +16,7 @@ const form = ref<Settings>({
   llm_api_key: '',
   ollama_base_url: 'http://localhost:11434',
   ollama_model: 'llama3',
+  bubble_timeout_seconds: '10',
 })
 const saved = ref(false)
 const loadError = ref(false)
@@ -95,6 +96,17 @@ async function save() {
         <input type="text" v-model="form.ollama_model" placeholder="llama3" />
       </div>
     </template>
+
+    <div class="field">
+      <label>Tempo do balão (segundos)</label>
+      <input
+        v-model="form.bubble_timeout_seconds"
+        type="number"
+        min="3"
+        max="60"
+        placeholder="10"
+      />
+    </div>
 
     <p v-if="loadError" class="error-msg">Erro ao carregar configurações.</p>
     <button class="save-btn" @click="save">{{ saved ? '✓ Salvo!' : 'Salvar' }}</button>

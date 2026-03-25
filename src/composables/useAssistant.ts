@@ -16,6 +16,7 @@ export interface Settings {
   llm_api_key: string
   ollama_base_url: string
   ollama_model: string
+  bubble_timeout_seconds: string
 }
 
 export function useAssistant() {
@@ -25,6 +26,10 @@ export function useAssistant() {
   const syncStatus = ref('Aguardando sync...')
   const qrData = ref<string | null>(null)
   const isStreaming = ref(false)
+  const bubbleText = ref('')
+  const inputOpen = ref(false)
+  const lastCatMessage = ref('')
+  const settings = ref<Settings | null>(null)
 
   let unlisteners: UnlistenFn[] = []
 
@@ -33,6 +38,27 @@ export function useAssistant() {
     catState.value = 'error'
     if (errorResetTimer) clearTimeout(errorResetTimer)
     errorResetTimer = setTimeout(() => { catState.value = 'idle' }, 3000)
+  }
+
+  let bubbleTimer: ReturnType<typeof setTimeout> | null = null
+  let bubbleTimerPending = false
+
+  function startBubbleTimer(seconds: number) {
+    if (inputOpen.value) {
+      bubbleTimerPending = true
+      return
+    }
+    bubbleTimer = setTimeout(() => {
+      bubbleText.value = ''
+      bubbleTimerPending = false
+    }, seconds * 1000)
+  }
+
+  function clearBubbleTimer() {
+    if (bubbleTimer !== null) {
+      clearTimeout(bubbleTimer)
+      bubbleTimer = null
+    }
   }
 
   // QR polling lives inside the composable to avoid mutating qrData from outside
@@ -63,9 +89,16 @@ export function useAssistant() {
       catState.value = 'syncing'
       syncStatus.value = 'Sincronizando...'
     }))
-    unlisteners.push(await listen('sync_complete', (e) => {
+    unlisteners.push(await listen<number>('sync_complete', (e) => {
       catState.value = 'idle'
-      syncStatus.value = `Sync: agora (${e.payload} novas msgs)`
+      const count = e.payload
+      bubbleText.value = count > 0
+        ? `${count} nova${count > 1 ? 's' : ''} mensagem${count > 1 ? 's' : ''} 📬`
+        : 'Sync completo — sem novidades 👌'
+      const timeout = parseInt(settings.value?.bubble_timeout_seconds ?? '10', 10) || 10
+      clearBubbleTimer()
+      startBubbleTimer(timeout)
+      syncStatus.value = `Último sync: ${count} mensagens`
     }))
     unlisteners.push(await listen('sync_error', () => {
       setError()
@@ -78,8 +111,11 @@ export function useAssistant() {
     unlisteners.push(await listen<string>('llm_token', (e) => {
       catState.value = 'responding'
       currentResponse.value += e.payload
+      clearBubbleTimer()
+      bubbleText.value = currentResponse.value
     }))
     unlisteners.push(await listen('llm_done', () => {
+      lastCatMessage.value = currentResponse.value
       messages.value.push({ role: 'assistant', content: currentResponse.value })
       currentResponse.value = ''
       catState.value = 'idle'
@@ -93,11 +129,20 @@ export function useAssistant() {
     }))
   })
 
+  watch(inputOpen, (open) => {
+    if (!open && bubbleTimerPending) {
+      bubbleTimerPending = false
+      const timeout = parseInt(settings.value?.bubble_timeout_seconds ?? '10', 10) || 10
+      startBubbleTimer(timeout)
+    }
+  })
+
   onUnmounted(() => {
     unlisteners.forEach(u => u())
     if (qrPollInterval) clearInterval(qrPollInterval)
     if (qrPollTimeout) clearTimeout(qrPollTimeout)
     if (errorResetTimer) clearTimeout(errorResetTimer)
+    clearBubbleTimer()
   })
 
   async function sendQuestion(question: string) {
@@ -114,7 +159,9 @@ export function useAssistant() {
   }
 
   async function loadSettings(): Promise<Settings> {
-    return await invoke<Settings>('get_settings')
+    const s = await invoke<Settings>('get_settings')
+    settings.value = s
+    return s
   }
 
   async function saveSettings(settings: Settings) {
@@ -132,6 +179,9 @@ export function useAssistant() {
     syncStatus,
     qrData,
     isStreaming,
+    bubbleText,
+    inputOpen,
+    lastCatMessage,
     sendQuestion,
     loadSettings,
     saveSettings,

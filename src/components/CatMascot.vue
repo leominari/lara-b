@@ -4,6 +4,7 @@ import lottie, { AnimationItem } from 'lottie-web'
 import type { CatState } from '../composables/useAssistant'
 
 const props = defineProps<{ state: CatState }>()
+const emit = defineEmits<{ click: [] }>()
 
 const container = ref<HTMLDivElement | null>(null)
 let anim: AnimationItem | null = null
@@ -41,15 +42,15 @@ watch(() => props.state, (state) => {
 </script>
 
 <template>
-  <div class="cat-wrapper" :class="`cat-${state}`">
+  <div class="cat-wrapper" :class="`cat-${state}`" @click="emit('click')" style="cursor:pointer">
     <div ref="container" class="cat-container" />
   </div>
 </template>
 
 <style scoped>
 .cat-container {
-  width: 140px;
-  height: 100px;
+  width: 280px;
+  height: 200px;
   position: relative;
 }
 .cat-error .cat-container {

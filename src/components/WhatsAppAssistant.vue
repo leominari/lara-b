@@ -1,122 +1,293 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import CatMascot from './CatMascot.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SetupWizard from './SetupWizard.vue'
 import { useAssistant } from '../composables/useAssistant'
 
 const {
-  catState, messages, currentResponse, syncStatus, qrData, isStreaming,
-  sendQuestion, loadSettings, saveSettings, checkPrerequisites,
+  catState,
+  bubbleText,
+  inputOpen,
+  lastCatMessage,
+  isStreaming,
+  qrData,
+  sendQuestion,
+  loadSettings,
+  saveSettings,
+  checkPrerequisites,
 } = useAssistant()
-// Note: QR polling is managed inside useAssistant — do NOT mutate qrData here
 
-const input = ref('')
-const showSettings = ref(false)
 const setupComplete = ref(false)
-const chatEl = ref<HTMLDivElement | null>(null)
+const showSettings = ref(false)
+const isHovered = ref(false)
+const inputText = ref('')
 
-// Auto-scroll chat
-watch([messages, currentResponse], async () => {
-  await nextTick()
-  if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
+// Close input when window loses focus
+let unlistenFocus: (() => void) | null = null
+onMounted(async () => {
+  const win = getCurrentWindow()
+  unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
+    if (!focused) {
+      inputOpen.value = false
+      showSettings.value = false
+    }
+  })
+})
+onUnmounted(() => {
+  unlistenFocus?.()
 })
 
-async function submit() {
-  const q = input.value.trim()
+function handleCatClick() {
+  if (!setupComplete.value) return
+  inputOpen.value = !inputOpen.value
+  if (inputOpen.value && !bubbleText.value) {
+    bubbleText.value = lastCatMessage.value || 'Oi! Pode perguntar! 😸'
+  }
+}
+
+async function handleSubmit() {
+  const q = inputText.value.trim()
   if (!q || isStreaming.value) return
-  input.value = ''
+  inputText.value = ''
   await sendQuestion(q)
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    inputOpen.value = false
+    showSettings.value = false
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handleSubmit()
+  }
+}
+
+async function handleMoveMousedown(e: MouseEvent) {
+  e.preventDefault()
+  const win = getCurrentWindow()
+  await win.startDragging()
+}
+
+async function handleClose() {
+  const win = getCurrentWindow()
+  await win.close()
 }
 </script>
 
 <template>
-  <div class="assistant">
-    <!-- Setup Wizard -->
-    <SetupWizard
-      v-if="!setupComplete"
-      :check-prerequisites="checkPrerequisites"
-      @ready="setupComplete = true"
+  <!-- Setup wizard gate -->
+  <SetupWizard
+    v-if="!setupComplete"
+    :checkPrerequisites="checkPrerequisites"
+    @ready="setupComplete = true"
+  />
+
+  <!-- QR overlay -->
+  <div v-else-if="qrData" class="qr-overlay">
+    <p>Escaneie o QR code no WhatsApp</p>
+    <img :src="qrData" alt="QR Code" />
+  </div>
+
+  <!-- Main floating cat UI -->
+  <div
+    v-else
+    class="cat-root"
+    @mouseenter="isHovered = true"
+    @mouseleave="isHovered = false"
+    @keydown="handleKeydown"
+  >
+    <!-- Hover controls -->
+    <div class="hover-controls" :class="{ visible: isHovered }">
+      <div
+        class="ctrl-btn move-btn"
+        title="Mover"
+        @mousedown="handleMoveMousedown"
+      >⠿</div>
+      <div
+        class="ctrl-btn settings-btn"
+        title="Configurações"
+        @click="showSettings = !showSettings"
+      >⚙</div>
+      <div
+        class="ctrl-btn close-btn"
+        title="Fechar"
+        @click="handleClose"
+      >✕</div>
+    </div>
+
+    <!-- Settings panel overlay -->
+    <SettingsPanel
+      v-if="showSettings"
+      :loadSettings="loadSettings"
+      :saveSettings="saveSettings"
+      @close="showSettings = false"
     />
 
-    <template v-else>
-      <!-- QR code overlay -->
-      <div v-if="qrData" class="qr-overlay">
-        <p>Escaneie o QR code no WhatsApp</p>
-        <img :src="qrData" width="200" height="200" alt="WhatsApp QR Code" />
-        <p class="qr-hint">Aguardando scan... (timeout: 5 min)</p>
-      </div>
+    <!-- Speech bubble -->
+    <div v-if="bubbleText" class="speech-bubble">
+      {{ bubbleText }}
+    </div>
 
-      <template v-else>
-        <!-- Header: cat + sync status + settings btn -->
-        <div class="header-row">
-          <CatMascot :state="catState" />
-          <div class="status-area">
-            <span class="sync-status">{{ syncStatus }}</span>
-            <button class="settings-btn" @click="showSettings = !showSettings" title="Configurações">⚙</button>
-          </div>
-        </div>
+    <!-- Cat mascot -->
+    <CatMascot :state="catState" @click="handleCatClick" />
 
-        <!-- Settings panel -->
-        <SettingsPanel
-          v-if="showSettings"
-          :load-settings="loadSettings"
-          :save-settings="saveSettings"
-          @close="showSettings = false"
-        />
-
-        <!-- Chat history -->
-        <div v-else ref="chatEl" class="chat-history">
-          <div v-if="messages.length === 0" class="empty-state">
-            Olá! Pergunte sobre suas mensagens do WhatsApp.
-          </div>
-          <div v-for="(msg, i) in messages" :key="i" :class="['msg', msg.role]">
-            <span class="msg-label">{{ msg.role === 'user' ? 'Você' : 'Assistente' }}</span>
-            <span class="msg-body">{{ msg.content }}</span>
-          </div>
-          <!-- Streaming response -->
-          <div v-if="currentResponse" class="msg assistant">
-            <span class="msg-label">Assistente</span>
-            <span class="msg-body">{{ currentResponse }}<span class="cursor">▌</span></span>
-          </div>
-        </div>
-
-        <!-- Input bar -->
-        <div class="input-bar">
-          <input
-            v-model="input"
-            placeholder="Digite sua pergunta..."
-            :disabled="isStreaming"
-            @keydown.enter="submit"
-          />
-          <button :disabled="isStreaming" @click="submit">→</button>
-        </div>
-      </template>
-    </template>
+    <!-- Input bar -->
+    <div v-if="inputOpen" class="input-bar">
+      <input
+        v-model="inputText"
+        type="text"
+        placeholder="Digite sua pergunta..."
+        :disabled="isStreaming"
+        autofocus
+        @keydown.stop="handleKeydown"
+      />
+      <button
+        class="send-btn"
+        :disabled="isStreaming || !inputText.trim()"
+        @click="handleSubmit"
+      >→</button>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.assistant { display: flex; flex-direction: column; height: 100%; }
-.header-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); }
-.status-area { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.sync-status { font-size: 0.7rem; color: #aaa; }
-.settings-btn { background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 1rem; }
-.chat-history { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-.empty-state { color: #aaa; font-size: 0.85rem; text-align: center; margin-top: 20px; }
-.msg { display: flex; flex-direction: column; gap: 2px; max-width: 90%; }
-.msg.user { align-self: flex-end; }
-.msg.assistant { align-self: flex-start; }
-.msg-label { font-size: 0.65rem; color: #aaa; }
-.msg-body { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 6px 10px; font-size: 0.82rem; line-height: 1.4; }
-.msg.user .msg-body { background: rgba(37,211,102,0.2); }
-.cursor { animation: blink 0.8s infinite; }
-@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-.input-bar { display: flex; gap: 6px; padding: 8px; border-top: 1px solid rgba(255,255,255,0.1); }
-.input-bar input { flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 6px 10px; color: white; font-size: 0.85rem; }
-.input-bar input:disabled { opacity: 0.5; }
-.input-bar button { background: rgba(37,211,102,0.3); border: 1px solid rgba(37,211,102,0.4); color: white; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
-.input-bar button:disabled { opacity: 0.5; cursor: default; }
-.qr-overlay { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 20px; }
-.qr-hint { font-size: 0.75rem; color: #aaa; }
+.cat-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding-top: 28px; /* space for hover controls */
+}
+
+/* Hover controls */
+.hover-controls {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+  pointer-events: none;
+  z-index: 10;
+}
+.hover-controls.visible {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.ctrl-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #ddd;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  backdrop-filter: blur(4px);
+}
+.ctrl-btn:hover {
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+}
+.move-btn { cursor: grab; }
+.move-btn:active { cursor: grabbing; }
+.close-btn:hover { background: rgba(200, 40, 40, 0.8); }
+.settings-btn:hover { background: rgba(37, 211, 102, 0.5); }
+
+/* Speech bubble */
+.speech-bubble {
+  background: white;
+  color: #222;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  max-width: 280px;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  margin-bottom: 6px;
+  position: relative;
+  font-family: Inter, sans-serif;
+}
+.speech-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: white;
+}
+
+/* Input bar */
+.input-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 20px;
+  padding: 6px 10px;
+  width: 290px;
+  backdrop-filter: blur(4px);
+}
+.input-bar input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #eee;
+  font-size: 0.8rem;
+}
+.input-bar input::placeholder { color: #888; }
+.input-bar input:disabled { color: #666; }
+
+.send-btn {
+  background: #25d366;
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  color: white;
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.send-btn:disabled {
+  background: #444;
+  cursor: default;
+}
+
+/* QR overlay */
+.qr-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: white;
+  font-size: 0.8rem;
+  font-family: Inter, sans-serif;
+}
+.qr-overlay img {
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+}
 </style>

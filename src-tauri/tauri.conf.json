@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "focus-widget",
-        "width": 350,
-        "height": 500,
+        "width": 320,
+        "height": 320,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
