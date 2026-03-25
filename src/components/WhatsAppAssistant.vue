@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import CatMascot from './CatMascot.vue'
 import SettingsPanel from './SettingsPanel.vue'
@@ -23,6 +23,14 @@ const setupComplete = ref(false)
 const showSettings = ref(false)
 const isHovered = ref(false)
 const inputText = ref('')
+const inputEl = ref<HTMLInputElement | null>(null)
+
+watch(inputOpen, async (open) => {
+  if (open) {
+    await nextTick()
+    inputEl.value?.focus()
+  }
+})
 
 // Close input when window loses focus
 let unlistenFocus: (() => void) | null = null
@@ -135,13 +143,13 @@ async function handleClose() {
     <CatMascot :state="catState" @click="handleCatClick" />
 
     <!-- Input bar -->
-    <div v-if="inputOpen" class="input-bar">
+    <div class="input-bar" :class="{ open: inputOpen }">
       <input
+        ref="inputEl"
         v-model="inputText"
         type="text"
         placeholder="Digite sua pergunta..."
         :disabled="isStreaming"
-        autofocus
         @keydown.stop="handleKeydown"
       />
       <button
@@ -242,6 +250,15 @@ async function handleClose() {
   padding: 6px 10px;
   width: 290px;
   backdrop-filter: blur(4px);
+  opacity: 0;
+  transform: translateY(-8px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+.input-bar.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: all;
 }
 .input-bar input {
   flex: 1;
