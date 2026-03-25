@@ -22,3 +22,31 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Tauri build artifacts
+src-tauri/target/
+
+# Sensitive: API keys, environment variables
+.env
+.env.*
+!.env.example
+
+# Sensitive: SQLite databases (contain WhatsApp messages + settings with API keys)
+*.db
+*.sqlite
+*.sqlite3
+
+# Sensitive: WhatsApp session / browser profile (contains login cookies)
+.whatsapp-assistant/
+**/profile/
+**/userDataDir/
+playwright-session/
+
+# Sensitive: Tauri app data (macOS)
+~/Library/Application Support/com.leominari.focus-widget/
+
+# Superpowers plugin cache
+.superpowers/
+
+# Debug / inspection scripts
+scripts/wa_inspect.js
